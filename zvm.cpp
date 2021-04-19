@@ -69,6 +69,7 @@ int32_t reg[REG_SIZE];
 uint8_t fl = 0;
 
 bool debug = true;
+bool enableCmd = false;
 
 std::stringstream debugInfo;
 
@@ -117,13 +118,18 @@ std::vector<uint8_t> fetchInstrData(int32_t addr)
 	return instr;
 }
 
-std::string dataToStr(int32_t addr, int size)
+std::string dataToStr(int32_t addr, int size, int newLineLim = 0)
 {
 	std::stringstream ret;
 	for (int i = 0; i < size; i++)
 	{
 		ret << std::setw(2) << std::setfill('0') << std::hex << int(mem[addr + i]);
-		if (i != size - 1) ret << " ";
+		if (newLineLim)
+		{
+			if (i % newLineLim == newLineLim - 1) ret << "\n";
+			else ret << " ";
+		}
+		else ret << " ";
 	}
 	return ret.str();
 }
@@ -386,24 +392,94 @@ int32_t execute(int32_t ip)
 	return instrFunc[instrIndex](ip);
 }
 
+enum class CommandType
+{
+	Exec, Suspend, End
+};
+
+CommandType parseCommand(const std::string &cmd)
+{
+	if (cmd.length() == 0) return CommandType::Suspend;
+
+	std::stringstream ss(cmd);
+	std::string op;
+	ss >> op;
+
+	if (op == "s") return CommandType::Exec;
+	if (op == "q") return CommandType::End;
+
+	if (op == "p")
+	{
+		std::string arg;
+		ss >> arg;
+		if (std::isdigit(arg[0]))
+		{
+			int addr = std::stoi(arg);
+			std::string size;
+			ss >> size;
+			std::cout << dataToStr(addr, std::stoi(size), 16) << "\n";
+		}
+		else
+		{
+			int index = std::stoi(arg.c_str() + 1);
+			std::cout << "0x" << std::setw(8) << std::setfill('0') << std::hex << reg[index] << "\n";
+		}
+		return CommandType::Suspend;
+	}
+
+	if (op == "r")
+	{
+		for (int i = 0; i < REG_SIZE; i++)
+		{
+			std::cout << regToStr(i) << ":\t";
+			std::cout << "0x" << std::setw(8) << std::setfill('0') << std::hex << reg[i] << "\n";
+		}
+		return CommandType::Suspend;
+	}
+	return CommandType::Suspend;
+}
+
 const uint8_t testInstr[] =
 {
 	0x00,							// noop
 	0x10, 0x12, 0x34, 0x56, 0x78,	// movi r0, 0x78563412
 	0x11, 0x87, 0x65, 0x43, 0x21,	// movi r1, 0x21436587
 	0x82, 0x01,						// xorl r2, r0, r1
+	0x13, 0x04, 0x00, 0x00, 0x00,	// movi r3, 0x00000004
+	0x14, 0x00, 0x00, 0x00, 0x00,	// movi r4, 0x00000000
+	0x15, 0x01, 0x00, 0x00, 0x00,	// movi r5, 0x00000001
+	0x53, 0x35,						// subs r3, r3, r5
+	0x06, 0x34,						// comp r3, r4
+	0x0A, 0x1C, 0x00, 0x00, 0x00,	// jpgt 0x0000001C
+	0x04, 0x32, 0x10,				// muls r3, r2, r1, r0
 	0xE0							// halt
 };
 
-int main()
+int main(int argc, char *argv[])
 {
+	int32_t ip = 0;
+	if (argc == 2)
+	{
+		std::string arg(argv[1]);
+		enableCmd = (arg == "-d");
+	}
+
 	std::memcpy(mem, testInstr, sizeof(testInstr));
 	std::memset(reg, 0, sizeof(reg));
 
-	int32_t ip = 0;
-
 	while (ip != END_EXEC)
 	{
+		if (enableCmd)
+		{
+			std::string cmd;
+			std::cout << "Debug>> ";
+			std::getline(std::cin, cmd);
+
+			auto res = parseCommand(cmd);
+			if (res == CommandType::Suspend) continue;
+			if (res == CommandType::End) break;
+		}
+
 		std::stringstream ss;
 		ss << "0x" << std::setw(8) << std::setfill('0') << std::hex << ip << "  ";
 		ss << std::setw(16) << std::setfill(' ') << instrDataToStr(ip) << "\t";
